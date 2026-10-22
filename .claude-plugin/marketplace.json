@@ -1,0 +1,14 @@
+{
+  "name": "comrade-sync",
+  "owner": {
+    "name": "Angelina Kravchenko",
+    "email": "angelina.k@comradeweb.com"
+  },
+  "plugins": [
+    {
+      "name": "ccsync",
+      "source": "./",
+      "description": "Синхронизация чатов и памяти Claude Code (и Orca) между своими компьютерами через приватный git-репозиторий."
+    }
+  ]
+}

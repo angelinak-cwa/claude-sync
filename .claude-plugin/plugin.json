@@ -1,0 +1,9 @@
+{
+  "name": "ccsync",
+  "version": "0.1.0",
+  "description": "Синхронизация чатов и памяти Claude Code (и Orca) между своими компьютерами через приватный git-репозиторий.",
+  "author": {
+    "name": "Angelina Kravchenko",
+    "email": "angelina.k@comradeweb.com"
+  }
+}

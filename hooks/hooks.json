@@ -1,0 +1,39 @@
+{
+  "description": "Синхронизация чатов и памяти Claude Code между компьютерами: подтягивает при старте сессии, отправляет после ответов (не чаще раза в 10 минут) и при закрытии сессии.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/ccsync.sh\" start",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/ccsync.sh\" stop",
+            "async": true,
+            "timeout": 120
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/scripts/ccsync.sh\" end",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}
