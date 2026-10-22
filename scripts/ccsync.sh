@@ -245,6 +245,12 @@ setup() {
     git -C "$DATA" remote remove origin 2>/dev/null
     git -C "$DATA" remote add origin "$url"
     git -C "$DATA" fetch -q origin || { say "нет доступа к $url"; exit 1; }
+    # Переезд на другой репозиторий: пустой получает всю историю, непустой становится основным.
+    if git -C "$DATA" rev-parse -q --verify origin/main >/dev/null; then
+      git -C "$DATA" branch -q -u origin/main main
+    elif git -C "$DATA" rev-parse -q --verify HEAD >/dev/null; then
+      git -C "$DATA" push -q -u origin main || { say "не удалось отправить данные в $url"; exit 1; }
+    fi
   else
     git -c core.longpaths=true clone -q "$url" "$DATA" 2>/dev/null || { say "не удалось скачать $url — проверь ссылку и доступ"; exit 1; }
   fi
