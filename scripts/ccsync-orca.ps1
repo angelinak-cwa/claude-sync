@@ -40,6 +40,14 @@ function Read-Json([string]$path) {
   try { return [IO.File]::ReadAllText($path, $utf8) | ConvertFrom-Json } catch { return $null }
 }
 
+# Список строк из JSON-массива строк. ConvertFrom-Json в PowerShell 5 путается с пустыми и
+# вложенными массивами, поэтому строки просто достаём из текста.
+function Read-JsonList([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { return ,@() }
+  $text = [IO.File]::ReadAllText($path, $utf8)
+  return ,@([regex]::Matches($text, '"((?:[^"\\]|\\.)*)"') | ForEach-Object { [regex]::Unescape($_.Groups[1].Value) })
+}
+
 function Write-Text([string]$path, [string]$text) {
   $dir = Split-Path $path
   if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force $dir | Out-Null }
@@ -158,8 +166,8 @@ function Snapshot {
 
   # Что было здесь раньше, а теперь нет, — удалено на этом компьютере: не создавать заново (Т7, без автоудаления).
   $current = @($repoList | ForEach-Object { $_.path }) + @($wtList | ForEach-Object { $_.path })
-  $known = @(Read-Json (Join-Path $State 'structure-known.json'))
-  $removedOld = @(Read-Json (Join-Path $State 'structure-removed.json'))
+  $known = (Read-JsonList (Join-Path $State 'structure-known.json'))
+  $removedOld = (Read-JsonList (Join-Path $State 'structure-removed.json'))
   $removed = @(@($known) + @($removedOld) | Where-Object { $_ -and -not (Contains-Path $current $_) } | Sort-Object -Unique)
   Write-JsonIfChanged (Join-Path $State 'structure-known.json') @($current)
   Write-JsonIfChanged (Join-Path $State 'structure-removed.json') @($removed)
@@ -220,7 +228,7 @@ function New-Workspace([string]$rel, [string]$repoRel, $w) {
 
 function Apply {
   $aliases = Load-Aliases
-  $removed = @(Read-Json (Join-Path $State 'structure-removed.json'))
+  $removed = (Read-JsonList (Join-Path $State 'structure-removed.json'))
   $repos = @((Orca @('repo', 'list')).repos)
   $wts = @((Orca @('worktree', 'list')).worktrees)
   $localRepos = @($repos | ForEach-Object { To-Rel $_.path } | Where-Object { $_ })
@@ -333,7 +341,7 @@ function Reopen {
 
 function Status {
   if (Orca-Ready) { 'ccsync: Orca: запущена, проекты и вкладки синхронизируются' } else { 'ccsync: Orca: не запущена — проекты и вкладки синхронизируются, когда она будет открыта' }
-  $removed = @(Read-Json (Join-Path $State 'structure-removed.json'))
+  $removed = (Read-JsonList (Join-Path $State 'structure-removed.json'))
   if ($removed.Count) { "ccsync: удалено на этом компьютере (на других осталось, само не удаляется): $($removed -join ', ')" }
   $aliases = Load-Aliases
   $units = @()

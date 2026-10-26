@@ -71,6 +71,10 @@ PREFIX="$(encode "$HOME_NATIVE")"
 
 configured() { [ -d "$DATA/.git" ] && git -C "$DATA" remote get-url origin >/dev/null 2>&1; }
 
+# Windows не различает регистр в путях: там «Claude-clean-up» и «claude-clean-up» — одна папка.
+FOLD_CASE=0
+command -v cygpath >/dev/null 2>&1 && FOLD_CASE=1
+
 winpath() { if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
 
 # Всё, что говорит с Orca (проекты, workspaces, вкладки), — в ccsync-orca.ps1: Orca есть только на Windows.
@@ -149,18 +153,22 @@ plan() {
   { scan
     ls "$STATE_DIR/pending" 2>/dev/null | sed -n 's/\.jsonl$//p' | awk '{ print "H 0 " $0 }'
     open_sids | awk '{ print "O 0 " $0 }'
-  } | awk -v sid="$SID" '
+  } | awk -v sid="$SID" -v fold="$FOLD_CASE" '
     $1=="H" { hold[$3]=1; next }
     $1=="O" { open[$3]=1; next }
-    { tag=$1; val=$2; sub(/^[A-Z]+ [0-9]+ /, ""); p=$0
-      for (h in hold) if (index(p, "/" h ".jsonl") || index(p, "/" h "/")) next
+    { tag=$1; val=$2; sub(/^[A-Z]+ [0-9]+ /, "")
+      for (h in hold) if (index($0, "/" h ".jsonl") || index($0, "/" h "/")) next
+      # На Windows папки, которые отличаются только регистром, — одна папка: сравниваем без учёта регистра.
+      p = fold ? tolower($0) : $0
+      if (!(p in name)) name[p]=$0
       all[p]=1
       if (tag=="L") L[p]=val; else if (tag=="R") R[p]=val
       else if (tag=="LC") LC[p]=val; else if (tag=="RC") RC[p]=val; else if (tag=="B") B[p]=val }
     END {
-      for (p in all) {
+      for (k in all) {
+        p = name[k]
         if (p ~ /\/memory\//) {
-          l=(p in LC)?LC[p]:""; r=(p in RC)?RC[p]:""; b=(p in B)?B[p]:""
+          l=(k in LC)?LC[k]:""; r=(k in RC)?RC[k]:""; b=(k in B)?B[k]:""
           if (l!="" && r!="") {
             if (l==r) continue
             if (l==b) print "R2L", p
@@ -172,8 +180,8 @@ plan() {
         } else {
           current = (sid!="" && (index(p, "/" sid ".jsonl") || index(p, "/" sid "/")))
           for (o in open) if (index(p, "/" o ".jsonl") || index(p, "/" o "/")) current=1
-          if (!(p in R) || (p in L && L[p]+0 > R[p]+0)) print "L2R", p
-          else if (!current && (!(p in L) || R[p]+0 > L[p]+0)) print "R2L", p
+          if (!(k in R) || (k in L && L[k]+0 > R[k]+0)) print "L2R", p
+          else if (!current && (!(k in L) || R[k]+0 > L[k]+0)) print "R2L", p
         }
       }
     }'
@@ -279,10 +287,11 @@ apply_aliases() {
     # На Windows папки, которые отличаются только регистром, — одна и та же папка.
     [ "$(printf '%s' "$sk" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$dk" | tr 'A-Z' 'a-z')" ] && continue
     [ -d "$REPO_ROOT/$sk" ] || continue
-    (cd "$REPO_ROOT/$sk" && find . -type f -not -path './memory/*' | sed 's#^\./##') | while read -r p; do
-      if [ ! -f "$REPO_ROOT/$dk/$p" ] || [ "$(wc -c < "$REPO_ROOT/$sk/$p")" -gt "$(wc -c < "$REPO_ROOT/$dk/$p")" ]; then
-        copy "$REPO_ROOT/$sk/$p" "$REPO_ROOT/$dk/$p"
-      fi
+    { (cd "$REPO_ROOT/$sk" && find . -type f -not -path './memory/*' -printf 'S %s %P\n')
+      [ -d "$REPO_ROOT/$dk" ] && (cd "$REPO_ROOT/$dk" && find . -type f -printf 'D %s %P\n')
+    } | awk '{ t=$1; n=$2; sub(/^[SD] [0-9]+ /, ""); if (t=="S") S[$0]=n; else D[$0]=n }
+             END { for (p in S) if (!(p in D) || S[p]+0 > D[p]+0) print p }' | while read -r p; do
+      copy "$REPO_ROOT/$sk/$p" "$REPO_ROOT/$dk/$p"
     done
   done < "$f"
 }
@@ -552,8 +561,12 @@ case "$MODE" in
       say "синхронизация чатов не настроена. Чтобы включить, запусти /ccsync:setup"
       exit 0
     fi
+    # Здесь только самое нужное для этой сессии — свежие чаты и память; правила, файлы, структура,
+    # вкладки и отправка идут в фоне, чтобы не задерживать старт.
     lock 20 || exit 0
-    sync_all
+    pull
+    apply_aliases
+    reconcile
     unlock
     report
     if stale HEAD && ! recently_reopened; then
@@ -563,7 +576,7 @@ case "$MODE" in
         2) say "этот чат дописан на другом компьютере. Закрой его (/exit) и открой заново: claude --resume $SID" ;;
       esac
     fi
-    detach tabs ;;
+    detach bg ;;
   prompt)
     configured || exit 0
     timeout 10 git -C "$DATA" fetch -q origin >/dev/null 2>&1
@@ -582,7 +595,7 @@ case "$MODE" in
     detach bg ;;
   bg)
     configured || exit 0
-    lock 1 || exit 0
+    lock 30 || exit 0
     sync_all
     unlock
     orca_helper apply >/dev/null ;;
