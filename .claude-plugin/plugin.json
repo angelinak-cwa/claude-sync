@@ -1,6 +1,6 @@
 {
   "name": "ccsync",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Синхронизация Claude Code и Orca между своими компьютерами через приватный git-репозиторий: чаты, память, правила, файлы проектов, проекты и workspaces Orca, открытые вкладки.",
   "author": {
     "name": "Angelina Kravchenko",

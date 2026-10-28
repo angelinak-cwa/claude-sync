@@ -215,11 +215,23 @@ chat_sid() { case "$1" in *.jsonl) local b="${1##*/}"; printf '%s' "${b%.jsonl}"
 # Если нет (чат дописывали на двух компьютерах одновременно), старую сохраняем в conflicts/ (Т7).
 keep_if_diverged() {
   local old="$1" new="$2" p="$3" n
+  # Память не дописывается, а правится, — её конфликты решает трёхсторонняя сверка в plan().
+  case "$p" in */memory/*) return 0 ;; esac
   [ -f "$old" ] && [ -f "$new" ] || return 0
   n="$(wc -c < "$old")"
   cmp -s -n "$n" "$old" "$new" && return 0
   copy "$old" "$DATA/conflicts/$STAMP/projects/$p"
   CONFLICTS=$((CONFLICTS + 1))
+}
+
+# База для трёхсторонней сверки: «cksum путь» для путей со stdin, содержимое — из копии в репозитории $1.
+# Пути берём локальные (что есть здесь), а содержимое — из репозитория, а не из локальной папки:
+# Claude может дописать файл прямо во время сверки, и тогда в базу попала бы версия, которой в
+# репозитории нет, — следующая сверка приняла бы её за правку с другого компьютера (ложный конфликт
+# или тихий откат свежей правки к старой версии из репозитория).
+repo_base() {
+  (cd "$1" && while IFS= read -r p; do [ -f "$p" ] && printf '%s\0' "$p"; done | xargs -0 -r cksum) \
+    | awk '{ c=$1; sub(/^[0-9]+ [0-9]+ /, ""); print c, $0 }'
 }
 
 PULLED_CHATS=0
@@ -265,8 +277,8 @@ EOF
     [ -d "$d/memory" ] && dirs+=("./${d##*/}")
   done
   if [ "${#dirs[@]}" -gt 0 ]; then
-    (cd "$LOCAL_ROOT" && find "${dirs[@]}" -type f -path '*/memory/*' -exec cksum {} +) \
-      | awk -v p="$PREFIX" '{ c=$1; sub(/^[0-9]+ [0-9]+ \.\//, ""); sub("^" p, "HOME"); print c, $0 }' > "$STATE_DIR/memory-state"
+    (cd "$LOCAL_ROOT" && find "${dirs[@]}" -type f -path '*/memory/*') \
+      | awk -v p="$PREFIX" '{ sub(/^\.\//, ""); sub("^" p, "HOME"); print }' | repo_base "$REPO_ROOT" > "$STATE_DIR/memory-state"
   else
     : > "$STATE_DIR/memory-state"
   fi
@@ -351,7 +363,7 @@ $( {
       }
     }' )
 EOF
-  (cd "$lroot" && "$list" | tr '\n' '\0' | xargs -0 -r cksum) | awk '{ c=$1; sub(/^[0-9]+ [0-9]+ /, ""); print c, $0 }' > "$state"
+  (cd "$lroot" && "$list") | repo_base "$rroot" > "$state"
 }
 
 # Общие правила (Т10). Скиллы организации (skills/synced) Claude синхронизирует сам — их не трогаем.
