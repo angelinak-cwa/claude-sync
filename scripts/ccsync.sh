@@ -401,22 +401,50 @@ scope_files() {
 
 # --- git ---------------------------------------------------------------------
 
+# Причина последней ошибки git (строка «fatal:»/«error:», иначе последняя непустая) — для отчёта и /ccsync:status.
+GIT_ERR=""
+git_fail() {
+  GIT_ERR="$(grep -E '^(fatal|error):' "$STATE_DIR/git.err" 2>/dev/null | head -n1)"
+  [ -n "$GIT_ERR" ] || GIT_ERR="$(grep -v '^[[:space:]]*$' "$STATE_DIR/git.err" 2>/dev/null | tail -n1)"
+}
+
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || date +%s; }
+
+# Если git оборвался посреди операции (закрыли окно, выключили компьютер), остаётся файл блокировки,
+# и все следующие синхронизации молча не проходят. Сами мы в это время держим $LOCK, а ни одна наша
+# операция git не идёт 10 минут, поэтому блокировки старше 10 минут — брошенные: убираем их.
+unstick() {
+  local g="$DATA/.git" f now
+  now="$(date +%s)"
+  for f in "$g/index.lock" "$g/HEAD.lock" "$g/config.lock" "$g/packed-refs.lock" "$g/refs/heads/main.lock"; do
+    [ -e "$f" ] && [ $((now - $(mtime "$f"))) -gt 600 ] && rm -f "$f"
+  done
+  for f in "$g/rebase-merge" "$g/rebase-apply"; do
+    [ -d "$f" ] && [ $((now - $(mtime "$f"))) -gt 600 ] && git -C "$DATA" rebase --abort >/dev/null 2>&1
+  done
+  return 0
+}
+
 COMMIT_OK=1
 commit_all() {
-  git -C "$DATA" add -A >/dev/null 2>&1 || { COMMIT_OK=0; return; }
-  git -C "$DATA" diff --cached --quiet || git -C "$DATA" commit -qm "sync: $MACHINE $(date '+%Y-%m-%d %H:%M')" >/dev/null 2>&1 || COMMIT_OK=0
+  git -C "$DATA" add -A >/dev/null 2>"$STATE_DIR/git.err" || { git_fail; COMMIT_OK=0; return; }
+  git -C "$DATA" diff --cached --quiet \
+    || git -C "$DATA" commit -qm "sync: $MACHINE $(date '+%Y-%m-%d %H:%M')" >/dev/null 2>"$STATE_DIR/git.err" \
+    || { git_fail; COMMIT_OK=0; }
 }
 
 PULL_OK=1
 pull() {
+  unstick
   # -X theirs при rebase оставляет нашу версию, если один и тот же файл правили на двух компьютерах.
-  if ! git -C "$DATA" pull -q --rebase --autostash -X theirs >/dev/null 2>&1; then
+  if ! git -C "$DATA" pull -q --rebase --autostash -X theirs >/dev/null 2>"$STATE_DIR/git.err"; then
+    git_fail
     git -C "$DATA" rebase --abort >/dev/null 2>&1
     PULL_OK=0
   fi
 }
 
-push() { git -C "$DATA" push -q >/dev/null 2>&1 || PULL_OK=0; }
+push() { git -C "$DATA" push -q >/dev/null 2>"$STATE_DIR/git.err" || { git_fail; PULL_OK=0; }; }
 
 # Сначала забираем чужое, потом сверяем с локальным: так правка одного и того же файла
 # на двух компьютерах попадает в сверку как конфликт, а не теряется при rebase.
@@ -433,7 +461,12 @@ sync_all() {
     pull
     push
   fi
-  date +%s > "$STATE_DIR/last-sync"
+  if [ "$COMMIT_OK" = 1 ] && [ "$PULL_OK" = 1 ]; then
+    date +%s > "$STATE_DIR/last-sync"
+    rm -f "$STATE_DIR/last-error"
+  else
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M')" "${GIT_ERR:-неизвестная ошибка git}" > "$STATE_DIR/last-error"
+  fi
 }
 
 # --- Т12: текущий чат дописан на другом компьютере ------------------------------
@@ -547,6 +580,7 @@ report() {
   [ "$CONFLICTS" -gt 0 ] && say "файлов, изменённых на двух компьютерах сразу: $CONFLICTS (вторая версия сохранена в $DATA/conflicts)"
   [ "$COMMIT_OK" = 1 ] || say "не удалось сохранить изменения в $DATA — запусти /ccsync:status и покажи результат тому, кто настраивал"
   [ "$PULL_OK" = 1 ] || say "не удалось связаться с репозиторием (нет интернета или доступа) — синхронизирую в следующий раз"
+  [ -n "$GIT_ERR" ] && say "ответ git: $GIT_ERR"
   return 0
 }
 
@@ -558,6 +592,7 @@ status() {
     local t; t="$(cat "$STATE_DIR/last-sync")"
     say "последняя синхронизация: $(( ($(date +%s) - t) / 60 )) мин назад"
   fi
+  [ -f "$STATE_DIR/last-error" ] && say "последняя попытка не удалась: $(cat "$STATE_DIR/last-error")"
   say "проектов в репозитории: $(ls "$REPO_ROOT" 2>/dev/null | wc -l | tr -d ' '), чатов: $(find "$REPO_ROOT" -name '*.jsonl' -not -path '*/subagents/*' 2>/dev/null | wc -l | tr -d ' ')"
   say "отправка: $([ "$INTERVAL" -gt 0 ] && echo "не чаще раза в $INTERVAL с" || echo "после каждого ответа")"
   [ -d "$DATA/conflicts" ] && say "есть сохранённые конфликты: $DATA/conflicts"
@@ -630,7 +665,7 @@ case "$MODE" in
     lock 30 || { say "идёт другая синхронизация, попробуй через минуту"; exit 0; }
     sync_all
     unlock
-    say "синхронизировано"
+    [ "$COMMIT_OK" = 1 ] && [ "$PULL_OK" = 1 ] && say "синхронизировано"
     report
     orca_helper apply ;;
   *) say "неизвестная команда: $MODE"; exit 1 ;;

@@ -81,7 +81,8 @@ elseif (Test-Path (Join-Path $env:LOCALAPPDATA 'Programs\orca\resources\bin\orca
 
 function Orca([string[]]$a) {
   $out = & $script:orca @a --json 2>$null
-  if ($LASTEXITCODE -ne 0 -or -not $out) { throw "orca $($a -join ' '): ошибка" }
+  # Сразу после запуска Orca её CLI может ещё не отвечать — тогда здесь код ошибки, а в следующий раз всё пройдёт.
+  if ($LASTEXITCODE -ne 0 -or -not $out) { throw "orca $($a -join ' '): ошибка (код $LASTEXITCODE)" }
   $j = ($out -join "`n") | ConvertFrom-Json
   if (-not $j.ok) { throw "orca $($a -join ' '): $($j.error.message)" }
   return $j.result
